@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>BADMINTON SMASH DEFENSE</title>
+    <link href="https://fonts.googleapis.com/css2?family=Teko:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --court-green: #1a472a;
+            --court-line: #ffffff;
+            --shuttle-cork: #e0e0e0;
+            --shuttle-skirt: #ffffff;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0d2b1a;
+            font-family: 'Teko', sans-serif;
+            touch-action: none;
+            user-select: none;
+            cursor: none; /* Hide default cursor */
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; 
+        }
+        /* HUD */
+        #score-board {
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            color: #fff;
+            font-size: 32px;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            font-weight: 700;
+        }
+        
+        /* Game Over Screen */
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: auto;
+            background: rgba(0, 40, 0, 0.9);
+            padding: 40px;
+            border: 2px solid #fff;
+            box-shadow: 0 0 50px rgba(0,0,0,0.8);
+            border-radius: 8px;
+        }
+        h1 {
+            color: #fff;
+            font-size: 64px;
+            margin: 0 0 20px 0;
+            text-transform: uppercase;
+            line-height: 1;
+        }
+        #stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-box {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .stat-val {
+            font-size: 40px;
+            color: #fff;
+            line-height: 1;
+        }
+        .stat-label {
+            font-size: 16px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+        button {
+            background: #fff;
+            border: none;
+            color: #004d00;
+            padding: 10px 40px;
+            font-size: 32px;
+            font-family: 'Teko', sans-serif;
+            font-weight: 700;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            border-radius: 4px;
+        }
+        button:hover {
+            transform: scale(1.05);
+            background: #e6e6e6;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 20px;
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <div id="score-board">
+            HITS: <span id="score-val">0</span> / <span id="max-val">25</span>
+        </div>
+        
+        <div id="game-over">
+            <h1>DRILL COMPLETE</h1>
+            <div id="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-val" id="final-hits">0</div>
+                    <div class="stat-label">Hits</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-val" id="final-accuracy">0%</div>
+                    <div class="stat-label">Accuracy</div>
+                </div>
+            </div>
+            <button id="restart-btn">REPLAY DRILL</button>
+        </div>
+
+        <div id="instructions">MOUSE to Move &nbsp;|&nbsp; CLICK to Smash</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- GAME CONFIGURATION ---
+        const CONFIG = {
+            baseSpeed: 90, 
+            racketBoundX: 18,
+            racketBoundY: 10,
+            colors: {
+                court: 0x1a472a,
+                lines: 0xaaaaaa,
+                racketFrame: 0x3366cc,
+                racketString: 0xeeeeee,
+                shuttle: 0xffffff
+            }
+        };
+
+        // --- STATE ---
+        let state = {
+            hits: 0,
+            maxBalls: 25,
+            spawnedBalls: 0,
+            isRunning: true,
+            isPaused: false,
+            mouse: { x: 0, y: 0 },
+            swinging: false,
+            swingTime: 0,
+            swingDuration: 0.15, // Fast snap
+            handedness: 'right',
+            lastSpawnTime: 0
+        };
+        
+        window.addEventListener('message', (e) => {
+             if (e.data && e.data.type === 'PAUSE_GAME') {
+                 state.isPaused = e.data.payload;
+                 if (!state.isPaused) clock.getDelta();
+             }
+             if (e.data && e.data.type === 'SET_HANDEDNESS') {
+                 state.handedness = e.data.payload;
+                 updateRacketOrientation();
+             }
+             if (e.data && e.data.type === 'START_MATCH') {
+                 startMatch(e.data.payload);
+             }
+        });
+
+        // --- SETUP SCENE ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(CONFIG.colors.court);
+        scene.fog = new THREE.Fog(CONFIG.colors.court, 30, 120);
+
+        // Camera setup for "Defensive Smash Receive" stance
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+        camera.position.set(0, 1, 12); 
+        camera.rotation.order = 'YXZ';
+        camera.rotation.x = -15 * Math.PI / 180; 
+        camera.rotation.y = 10 * Math.PI / 180;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // --- POST PROCESSING ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.5;
+        bloomPass.strength = 0.6;
+        bloomPass.radius = 0.2;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- ASSETS ---
+        const gridHelper = new THREE.GridHelper(200, 20, CONFIG.colors.lines, 0x225533);
+        gridHelper.position.y = -5; // Floor level
+        scene.add(gridHelper);
+        
+        const netGeo = new THREE.BoxGeometry(60, 5, 0.1);
+        const netMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, wireframe: true });
+        const net = new THREE.Mesh(netGeo, netMat);
+        net.position.set(0, -1, -40); // Base of net
+        // Add Top Tape
+        const tapeGeo = new THREE.BoxGeometry(60, 0.2, 0.15);
+        const tapeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const tape = new THREE.Mesh(tapeGeo, tapeMat);
+        tape.position.y = 2.5; // Top of net mesh
+        net.add(tape);
+        scene.add(net);
+
+        // --- PLAYER RACKET STRUCTURE ---
+        // 1. PlayerGroup (The Hand/Grip Position)
+        const playerGroup = new THREE.Group();
+        playerGroup.position.set(2, -2, 4); 
+        scene.add(playerGroup);
+
+        // 2. WristPivot (Rotates for swings)
+        const wristPivot = new THREE.Group();
+        playerGroup.add(wristPivot);
+
+        // 3. RacketVisuals (Offset so Handle Bottom is at Pivot)
+        const racketVisuals = new THREE.Group();
+        // Shift Visuals UP so the Grip (bottom of handle) aligns with Pivot (0,0,0)
+        // Handle length ~3. Head center is ~5 units from bottom.
+        racketVisuals.position.y = 5.0; 
+        
+        // Horizontal Orientation Setup:
+        // Rotate the Visuals group so the racket points sideways
+        // Z-Rotation: -90 deg -> Points Right (from camera view)
+        racketVisuals.rotation.z = -Math.PI / 2;
+        wristPivot.add(racketVisuals);
+
+        function updateRacketOrientation() {
+             // Reset visual rotation
+             racketVisuals.rotation.set(0,0,0);
+             
+             if (state.handedness === 'left') {
+                 // Left Hand: Hand on Left (-X), Racket Points Right (Towards Center)
+                 // Racket "Up" is +Y. Rotate Z -90 deg -> +X (Right)
+                 racketVisuals.rotation.z = -Math.PI / 2;
+             } else {
+                 // Right Hand: Hand on Right (+X), Racket Points Left (Towards Center)
+                 // Rotate Z +90 deg -> -X (Left)
+                 racketVisuals.rotation.z = Math.PI / 2;
+             }
+        }
+
+        // --- RACKET GEOMETRY ---
+        // Frame
+        const frameGeo = new THREE.TorusGeometry(2, 0.15, 8, 32);
+        const frameMat = new THREE.MeshStandardMaterial({ color: CONFIG.colors.racketFrame, roughness: 0.4 });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        frame.scale.set(1, 1.3, 1);
+        racketVisuals.add(frame); // Head Center at 0,0,0 of Visuals (which is +5 from Pivot)
+        
+        // Strings (Generate Grid Texture)
+        function createStringTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            
+            // Clear
+            ctx.clearRect(0, 0, 512, 512);
+            
+            // Grid Lines
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 4;
+            
+            const step = 32;
+            for(let i=0; i<=512; i+=step) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0); ctx.lineTo(i, 512);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(0, i); ctx.lineTo(512, i);
+                ctx.stroke();
+            }
+            
+            const tex = new THREE.CanvasTexture(canvas);
+            return tex;
+        }
+
+        // Use CircleGeometry to fill the Torus hole properly
+        const stringGeo = new THREE.CircleGeometry(1.9, 32); 
+        const stringMat = new THREE.MeshBasicMaterial({ 
+            map: createStringTexture(), 
+            color: CONFIG.colors.racketString, 
+            transparent: true, 
+            opacity: 0.7, // Visible but see-through
+            side: THREE.DoubleSide
+        });
+        const strings = new THREE.Mesh(stringGeo, stringMat);
+        strings.scale.set(1, 1.3, 1); // Match frame elongation
+        racketVisuals.add(strings);
+        
+        // Shaft/Neck
+        const neckGeo = new THREE.CylinderGeometry(0.15, 0.15, 1);
+        const neck = new THREE.Mesh(neckGeo, frameMat);
+        neck.position.y = -2; // Below head
+        racketVisuals.add(neck);
+        
+        // Handle
+        const handleGeo = new THREE.CylinderGeometry(0.15, 0.15, 3.5);
+        const handleMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        const handle = new THREE.Mesh(handleGeo, handleMat);
+        // Head at 0. Neck ends at -2.5. Handle starts around there.
+        handle.position.y = -4.25;
+        racketVisuals.add(handle);
+        
+        // Lights
+        const light = new THREE.PointLight(0xffffff, 2, 20);
+        light.position.set(5, 5, 5);
+        playerGroup.add(light);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(0, 10, 0);
+        scene.add(dirLight);
+
+        // --- OBJECT POOLING ---
+        class Pool {
+            constructor(createFn, count) {
+                this.createFn = createFn;
+                this.pool = [];
+                this.active = [];
+                for (let i = 0; i < count; i++) {
+                    const obj = createFn();
+                    obj.visible = false;
+                    scene.add(obj);
+                    this.pool.push(obj);
+                }
+            }
+
+            get() {
+                if (this.pool.length === 0) return null;
+                const obj = this.pool.pop();
+                obj.visible = true;
+                this.active.push(obj);
+                return obj;
+            }
+
+            release(obj) {
+                const index = this.active.indexOf(obj);
+                if (index > -1) {
+                    this.active.splice(index, 1);
+                    obj.visible = false;
+                    this.pool.push(obj);
+                }
+            }
+            
+            reset() {
+                [...this.active].forEach(obj => this.release(obj));
+            }
+        }
+
+        // Shuttlecock Pool
+        const shuttlePool = new Pool(() => {
+            const group = new THREE.Group();
+            
+            // Cork
+            const corkGeo = new THREE.SphereGeometry(0.4, 16, 16);
+            const corkMat = new THREE.MeshStandardMaterial({ color: CONFIG.colors.shuttle, roughness: 0.6 });
+            const cork = new THREE.Mesh(corkGeo, corkMat);
+            group.add(cork);
+            
+            // Skirt (Cone)
+            const skirtGeo = new THREE.ConeGeometry(0.5, 0.7, 16, 1, true);
+            const skirtMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff, 
+                side: THREE.DoubleSide, 
+                transparent: true, 
+                opacity: 0.8 
+            });
+            const skirt = new THREE.Mesh(skirtGeo, skirtMat);
+            skirt.position.y = 0.35;
+            group.add(skirt);
+            
+            // Rotate so cork faces forward/motion usually
+            group.rotation.x = -Math.PI / 2;
+            
+            group.userData = { velocity: new THREE.Vector3(), rotSpeed: 0, returning: false };
+            return group;
+        }, 30);
+
+        // Feather Particle Pool
+        const particlePool = new Pool(() => {
+            const geo = new THREE.PlaneGeometry(0.3, 0.1);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.userData = { velocity: new THREE.Vector3(), life: 0 };
+            return mesh;
+        }, 150);
+
+
+        // --- INPUT HANDLING ---
+        
+        window.addEventListener('mousemove', (e) => {
+            state.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            state.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+        
+        window.addEventListener('mousedown', () => {
+            if (!state.swinging && state.isRunning && !state.isPaused) {
+                state.swinging = true;
+                state.swingTime = 0;
+                checkHit();
+            }
+        });
+
+        // --- GAME FUNCTIONS ---
+
+        function startMatch(ballCount) {
+            state.maxBalls = ballCount;
+            state.spawnedBalls = 0;
+            state.hits = 0;
+            state.isRunning = true;
+            state.swinging = false;
+            
+            document.getElementById('score-val').innerText = '0';
+            document.getElementById('max-val').innerText = state.maxBalls;
+            document.getElementById('game-over').style.display = 'none';
+            document.body.style.cursor = 'none';
+            
+            shuttlePool.reset();
+            particlePool.reset();
+        }
+
+        function spawnShuttle() {
+            if (state.spawnedBalls >= state.maxBalls) return;
+
+            const s = shuttlePool.get();
+            if (!s) return;
+
+            state.spawnedBalls++;
+
+            // Spawn High (Smash origin)
+            const x = (Math.random() - 0.5) * 40; 
+            const y = 12 + Math.random() * 5; 
+            s.position.set(x, y, -120);
+            
+            // Aim at defensive area (Waist/Knee level)
+            const targetX = playerGroup.position.x + (Math.random() - 0.5) * 10;
+            const targetY = -3 + (Math.random() * 2); 
+            
+            const speed = CONFIG.baseSpeed + (state.hits * 0.5); 
+            const dir = new THREE.Vector3(targetX - x, targetY - y, 5 - (-120)).normalize(); 
+            
+            s.userData.velocity.copy(dir).multiplyScalar(speed);
+            s.userData.rotSpeed = Math.random() * 10;
+            s.userData.returning = false;
+            
+            s.rotation.set(-Math.PI/2, 0, 0);
+        }
+
+        function createFeatherExplosion(pos) {
+            for(let i=0; i<8; i++) {
+                const p = particlePool.get();
+                if(p) {
+                    p.position.copy(pos);
+                    p.rotation.set(Math.random()*3, Math.random()*3, Math.random()*3);
+                    p.userData.velocity.set(
+                        (Math.random() - 0.5) * 15,
+                        (Math.random() - 0.5) * 15,
+                        (Math.random() - 0.5) * 15 + 10 
+                    );
+                    p.userData.life = 0.6;
+                    p.scale.setScalar(1);
+                }
+            }
+        }
+
+        function checkHit() {
+            // Get World Position of the Strings (Sweet Spot)
+            const sweetSpot = new THREE.Vector3();
+            strings.getWorldPosition(sweetSpot);
+            
+            const hitRadius = 3.5; // Tighter hit radius centered on strings
+            
+            for (let i = shuttlePool.active.length - 1; i >= 0; i--) {
+                const s = shuttlePool.active[i];
+                if (s.userData.returning) continue; 
+
+                // Check distance between Strings and Shuttle
+                if (s.position.distanceTo(sweetSpot) < hitRadius && s.position.z > -5 && s.position.z < 15) {
+                    // HIT!
+                    createFeatherExplosion(s.position);
+                    
+                    // Deflection
+                    s.userData.velocity.z = -Math.abs(s.userData.velocity.z) * 0.9; 
+                    s.userData.velocity.y = Math.abs(s.userData.velocity.y) + 12; // High Lift
+                    s.userData.velocity.x += (Math.random() - 0.5) * 12;
+                    
+                    s.userData.returning = true;
+                    
+                    updateScore(1);
+                    return; 
+                }
+            }
+        }
+
+        function updateScore(points) {
+            state.hits += points;
+            document.getElementById('score-val').innerText = state.hits;
+        }
+
+        function finishMatch() {
+            state.isRunning = false;
+            
+            document.getElementById('final-hits').innerText = state.hits + " / " + state.maxBalls;
+            const acc = Math.round((state.hits / state.maxBalls) * 100);
+            document.getElementById('final-accuracy').innerText = acc + "%";
+            
+            document.getElementById('game-over').style.display = 'block';
+            document.body.style.cursor = 'auto';
+        }
+
+        function replayDrill() {
+            startMatch(state.maxBalls);
+        }
+        
+        document.getElementById('restart-btn').addEventListener('click', replayDrill);
+
+        // --- MAIN LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (state.isPaused) return;
+
+            const delta = clock.getDelta();
+            const now = clock.getElapsedTime();
+
+            if (state.isRunning) {
+                if (state.spawnedBalls >= state.maxBalls && shuttlePool.active.length === 0) {
+                    finishMatch();
+                }
+
+                // Player Movement (Hand)
+                const rangeX = 14;
+                const rangeY = 6;
+                const centerX = (state.handedness === 'right') ? 4 : -4;
+                
+                const targetX = centerX + (state.mouse.x * rangeX);
+                const targetY = -2 + (state.mouse.y * rangeY); 
+                
+                playerGroup.position.x += (targetX - playerGroup.position.x) * 0.25;
+                playerGroup.position.y += (targetY - playerGroup.position.y) * 0.25;
+                
+                // Tilt Hand slightly with movement
+                playerGroup.rotation.z = (playerGroup.position.x - targetX) * 0.05;
+
+                // WRIST SWING ANIMATION
+                if (state.swinging) {
+                    state.swingTime += delta;
+                    const progress = state.swingTime / state.swingDuration;
+                    
+                    if (progress < 1) {
+                         const t = progress;
+                         // Wrist Snap: Rotate Pivot on X axis
+                         const snap = Math.sin(t * Math.PI);
+                         
+                         // Wrist Rotation (Forward Snap)
+                         wristPivot.rotation.x = -snap * 0.8; 
+                         
+                         // Slight forward push of arm
+                         playerGroup.position.z = 4 - (snap * 2.5);
+                    } else {
+                        state.swinging = false;
+                        wristPivot.rotation.x = 0;
+                        playerGroup.position.z = 4;
+                    }
+                } else {
+                    // Ready Breathing
+                    wristPivot.rotation.x = Math.sin(now * 4) * 0.05;
+                }
+
+                // Spawn Shuttles
+                const spawnDelay = Math.max(0.4, 0.8 - (state.hits * 0.01)); 
+                if (now - state.lastSpawnTime > spawnDelay) {
+                    spawnShuttle();
+                    state.lastSpawnTime = now;
+                }
+
+                // Update Shuttles
+                for (let i = shuttlePool.active.length - 1; i >= 0; i--) {
+                    const s = shuttlePool.active[i];
+                    s.position.addScaledVector(s.userData.velocity, delta);
+                    
+                    if (s.userData.velocity.lengthSq() > 0.1) {
+                         const target = s.position.clone().add(s.userData.velocity);
+                         const m = new THREE.Matrix4();
+                         m.lookAt(target, s.position, new THREE.Vector3(0,1,0));
+                         s.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(m), 0.15);
+                    }
+
+                    if (s.userData.returning) {
+                         if (s.position.z < -150 || s.position.y > 50) {
+                             shuttlePool.release(s);
+                         }
+                         s.userData.velocity.y -= 20 * delta;
+                         continue;
+                    }
+
+                    if (s.position.z > 20) {
+                        shuttlePool.release(s);
+                    }
+                }
+
+                for (let i = particlePool.active.length - 1; i >= 0; i--) {
+                    const p = particlePool.active[i];
+                    p.userData.life -= delta;
+                    if (p.userData.life <= 0) {
+                        particlePool.release(p);
+                    } else {
+                        p.position.addScaledVector(p.userData.velocity, delta);
+                        p.userData.velocity.y -= 10 * delta;
+                        p.scale.setScalar(p.userData.life);
+                        p.rotation.z += 5 * delta;
+                    }
+                }
+            }
+
+            composer.render();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        updateRacketOrientation();
+        animate();
+
+    </script>
+</body>
+</html>
