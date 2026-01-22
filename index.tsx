@@ -28,6 +28,7 @@ const styles = {
     padding: '12px 20px',
     background: '#000',
     zIndex: 20,
+    borderBottom: '1px solid #222',
   },
   gameWrapper: {
     flex: 1,
@@ -52,14 +53,24 @@ const styles = {
     background: active ? '#ffffff' : 'rgba(255, 255, 255, 0.05)',
     color: active ? '#000000' : '#ffffff',
     border: '1px solid ' + (active ? '#ffffff' : 'rgba(255, 255, 255, 0.1)'),
-    padding: '4px 12px',
+    padding: '6px 16px',
     borderRadius: '100px',
-    fontSize: '12px',
+    fontSize: '13px',
     fontWeight: '600' as const,
     cursor: 'pointer',
     transition: 'all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
     outline: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
   }),
+  title: {
+    color: '#fff',
+    fontSize: '18px',
+    fontWeight: '800',
+    letterSpacing: '-0.5px',
+    marginRight: '20px',
+  },
   modalOverlay: {
     position: 'absolute' as const,
     top: 0,
@@ -182,8 +193,7 @@ const styles = {
   }
 };
 
-const PROMPTS = {
-  gemini2p5: `
+const BASE_PROMPT = `
 Create a 3D web game "Badminton Defender".
 
 ### Visual & Camera Specs (Crucial)
@@ -200,39 +210,24 @@ Create a 3D web game "Badminton Defender".
 *   **Ball Physics**: Smashes come from high up (Z-axis distance) downwards towards the player's waist/knees.
 *   **Action**: Mouse moves racket hand. Click to swing (Wrist snap).
 *   **Racket Details**: The racket head must have VISIBLE strings. Use a generated canvas texture to create a clear grid pattern on the string bed. The string bed should be oval-shaped to fit the frame.
-*   **Hit Logic**: PHYSICAL HIT. The shuttle must collide with the racket Strings or Frame. Distance check should be from the racket HEAD.
+*   **Hit Logic**: CONTINUOUS COLLISION. 
+    *   **Active Hit**: If collision happens WHILE swinging -> Return ball fast (Score).
+    *   **Passive Block**: If collision happens WITHOUT swinging -> Ball stops/drops dead (No Score).
 *   **Hit**: Timing based. Hitting returns the ball. Missing counts as miss (no game over).
 *   **Default**: Right Handed.
-`,
-  gemini3: `
-Create a 3D web game "Badminton Defender".
 
-### Visual & Camera Specs (Crucial)
-*   **Stance**: Defensive Smash Receive.
-*   **Camera Height**: ~1.4m (slightly lower than net top).
-*   **Camera Angle**: 
-    *   **Pitch**: Down approx 15 degrees.
-    *   **Yaw**: Rotated approx 10 degrees (simulating body angle).
-    *   **Visual Check**: The top edge of the net should be visible in the upper-middle of the screen.
-*   **Environment**: Dark court, bright net tape.
-
-### Gameplay
-*   **Core Loop**: Drill Mode (10/25/50 balls).
-*   **Ball Physics**: Smashes come from high up (Z-axis distance) downwards towards the player's waist/knees.
-*   **Action**: Mouse moves racket hand. Click to swing (Wrist snap).
-*   **Racket Details**: The racket head must have VISIBLE strings. Use a generated canvas texture to create a clear grid pattern on the string bed. The string bed should be oval-shaped to fit the frame.
-*   **Hit Logic**: PHYSICAL HIT. The shuttle must collide with the racket Strings or Frame. Distance check should be from the racket HEAD.
-*   **Hit**: Timing based. Hitting returns the ball. Missing counts as miss (no game over).
-*   **Default**: Right Handed.
-`
-};
+### Juice & Feedback (New)
+*   **Audio**: Synthesized Web Audio API sound effects (No external assets). Needs: Swing Swoosh, Hit Thwack (High pitch), Block Thud (Low pitch).
+*   **Screen Shake**: Camera should shake briefly on successful active hits.
+*   **Impact**: Light flash on contact.
+`;
 
 function App() {
-  const [activeModel, setActiveModel] = useState('gemini3'); 
   const [showPrompt, setShowPrompt] = useState(false);
   const [showRemix, setShowRemix] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [handedness, setHandedness] = useState<'left' | 'right'>('right');
+  const [muted, setMuted] = useState(false);
   
   const [gameHtml, setGameHtml] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -241,16 +236,12 @@ function App() {
   const htmlCache = useRef<{ [key: string]: string }>({});
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const switchModel = (model: string) => {
-    if (activeModel === model) return;
-    setGameHtml(null);
-    setIsLoading(true);
-    setLoadingText('Initializing System...');
-    setActiveModel(model);
-  };
-
   const toggleHandedness = () => {
     setHandedness(prev => prev === 'left' ? 'right' : 'left');
+  };
+
+  const toggleMute = () => {
+    setMuted(prev => !prev);
   };
 
   const startMatch = (count: number) => {
@@ -266,18 +257,15 @@ function App() {
     if (iframe && iframe.contentWindow) {
       iframe.contentWindow.postMessage({ type: 'PAUSE_GAME', payload: showDisclaimer }, '*');
       iframe.contentWindow.postMessage({ type: 'SET_HANDEDNESS', payload: handedness }, '*');
+      iframe.contentWindow.postMessage({ type: 'SET_MUTE', payload: muted }, '*');
     }
-  }, [showDisclaimer, handedness, gameHtml]); 
+  }, [showDisclaimer, handedness, muted, gameHtml]); 
 
   useEffect(() => {
     let isMounted = true;
-    const url = activeModel === 'gemini3' ? './init/gemini3.html' : './init/gemini2p5.html';
+    const url = './init/gemini3.html';
 
     const loadGame = async () => {
-      if (htmlCache.current[url] && !isLoading) {
-         // logic to handle cached original
-      }
-
       try {
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load game');
@@ -310,7 +298,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [activeModel]);
+  }, []);
 
   const handleRemixAction = async (modification: string) => {
     if (!gameHtml) return;
@@ -321,11 +309,8 @@ function App() {
 
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const modelId = 'gemini-3-pro-preview';
         
-        const modelId = activeModel === 'gemini3' ? 'gemini-3-pro-preview' : 'gemini-2.5-pro';
-        
-        const currentPrompt = PROMPTS[activeModel as keyof typeof PROMPTS];
-
         const systemInstruction = `
 You are an expert Creative Technologist and 3D Web Game Developer.
 Your task is to modify the provided web game code based on the user's remix request.
@@ -348,6 +333,10 @@ window.addEventListener('message', (e) => {
      if (typeof setHandedness === 'function') setHandedness(e.data.payload);
      else if (typeof state !== 'undefined') state.handedness = e.data.payload;
   }
+  if (e.data && e.data.type === 'SET_MUTE') {
+     if (typeof setMute === 'function') setMute(e.data.payload);
+     else if (typeof state !== 'undefined') state.muted = e.data.payload;
+  }
   if (e.data && e.data.type === 'START_MATCH') {
      // Start Match handler
      if (typeof startMatch === 'function') startMatch(e.data.payload);
@@ -365,7 +354,7 @@ window.addEventListener('message', (e) => {
                 {
                     role: 'user',
                     parts: [
-                        { text: `ORIGINAL PROMPT CONTEXT:\n${currentPrompt}` },
+                        { text: `ORIGINAL PROMPT CONTEXT:\n${BASE_PROMPT}` },
                         { text: `CURRENT SOURCE CODE:\n${gameHtml}` },
                         { text: `REMIX INSTRUCTION: Apply this modification to the game: "${modification}". Ensure the code remains a single HTML file.` }
                     ]
@@ -399,6 +388,7 @@ window.addEventListener('message', (e) => {
         // Init state
         iframe.contentWindow.postMessage({ type: 'PAUSE_GAME', payload: showDisclaimer }, '*');
         iframe.contentWindow.postMessage({ type: 'SET_HANDEDNESS', payload: handedness }, '*');
+        iframe.contentWindow.postMessage({ type: 'SET_MUTE', payload: muted }, '*');
     }
   };
 
@@ -413,22 +403,19 @@ window.addEventListener('message', (e) => {
 
       {/* Header Control Bar */}
       <div style={styles.header}>
-        <div style={styles.buttonGroup}>
-          <button 
-            style={styles.button(activeModel === 'gemini2p5')}
-            onClick={() => switchModel('gemini2p5')}
-          >
-            2.5 Pro
-          </button>
-          <button 
-            style={styles.button(activeModel === 'gemini3')}
-            onClick={() => switchModel('gemini3')}
-          >
-            3 Pro
-          </button>
+        <div style={{display: 'flex', alignItems: 'center'}}>
+            <div style={styles.title}>BADMINTON DEFENDER</div>
+            <div style={{color: '#666', fontSize: '12px', background: '#222', padding: '4px 8px', borderRadius: '4px'}}>GEMINI 3 PRO</div>
         </div>
 
         <div style={styles.buttonGroup}>
+          <button 
+             style={styles.button(false)}
+             onClick={toggleMute}
+          >
+            {muted ? 'SOUND OFF' : 'SOUND ON'}
+          </button>
+          <div style={{width: 1, height: 20, background: '#333', margin: '0 8px'}}></div>
           <button 
              style={styles.button(false)}
              onClick={toggleHandedness}
@@ -464,7 +451,6 @@ window.addEventListener('message', (e) => {
         {!isLoading && gameHtml && (
           <iframe 
             ref={iframeRef}
-            key={activeModel + gameHtml.length} 
             srcDoc={gameHtml}
             style={styles.iframe} 
             title="Game Canvas"
@@ -509,7 +495,7 @@ window.addEventListener('message', (e) => {
             <h2 style={styles.modalHeader}>Underlying Prompt</h2>
             <p style={styles.modalSub}>The instructions used to one-shot generate this game.</p>
             <div style={styles.promptBox}>
-              {PROMPTS[activeModel as keyof typeof PROMPTS]}
+              {BASE_PROMPT}
             </div>
             <button style={styles.closeBtn} onClick={() => setShowPrompt(false)}>Close</button>
           </div>
