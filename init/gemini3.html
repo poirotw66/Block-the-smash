@@ -48,6 +48,48 @@
             text-shadow: 0 2px 5px rgba(0,0,0,0.5);
             font-weight: 700;
         }
+
+        #speed-display {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            text-align: right;
+            transform-origin: right top;
+            transition: transform 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .speed-label {
+            color: #aaa;
+            font-size: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: -5px;
+        }
+        .speed-value {
+            color: #ff3333; /* Red for danger/speed */
+            font-size: 64px;
+            font-weight: 700;
+            line-height: 0.9;
+            text-shadow: 0 0 15px rgba(255, 50, 50, 0.6);
+            display: inline-block;
+        }
+        .speed-unit {
+            font-size: 24px;
+            color: #fff;
+            margin-left: 5px;
+        }
+
+        #countdown {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 120px;
+            color: #fff;
+            font-weight: 800;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.8);
+            opacity: 0;
+            pointer-events: none;
+        }
         
         /* Game Over Screen */
         #game-over {
@@ -140,7 +182,17 @@
         <div id="score-board">
             HITS: <span id="score-val">0</span> / <span id="max-val">25</span>
         </div>
+
+        <div id="speed-display">
+            <div class="speed-label">INCOMING</div>
+            <div>
+                <span class="speed-value" id="speed-val">0</span>
+                <span class="speed-unit">KM/H</span>
+            </div>
+        </div>
         
+        <div id="countdown"></div>
+
         <div id="game-over">
             <h1>DRILL COMPLETE</h1>
             <div id="stats-grid">
@@ -167,7 +219,7 @@
 
         // --- GAME CONFIGURATION ---
         const CONFIG = {
-            baseSpeed: 90, 
+            baseSpeed: 110, // Increased from 90 for faster gameplay
             racketBoundX: 18,
             racketBoundY: 10,
             colors: {
@@ -175,7 +227,8 @@
                 lines: 0xaaaaaa,
                 racketFrame: 0x3366cc,
                 racketString: 0xeeeeee,
-                shuttle: 0xffffff
+                shuttle: 0xffffff,
+                trail: 0x00ffff // Cyan trail
             }
         };
 
@@ -267,8 +320,9 @@
             hits: 0,
             maxBalls: 25,
             spawnedBalls: 0,
-            isRunning: true,
+            isRunning: false, // Wait for countdown
             isPaused: false,
+            isInCountdown: false,
             mouse: { x: 0, y: 0 },
             swinging: false,
             swingTime: 0,
@@ -283,7 +337,7 @@
         window.addEventListener('message', (e) => {
              if (e.data && e.data.type === 'PAUSE_GAME') {
                  state.isPaused = e.data.payload;
-                 if (!state.isPaused) {
+                 if (!state.isPaused && !state.isInCountdown && state.isRunning) {
                     clock.getDelta();
                     AudioSys.init();
                  }
@@ -307,10 +361,11 @@
         scene.background = new THREE.Color(CONFIG.colors.court);
         scene.fog = new THREE.Fog(CONFIG.colors.court, 30, 120);
 
-        // Camera setup for "Defensive Smash Receive" stance
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+        // Camera setup for "Defensive Smash Receive" stance - WIDER FOV for Panoramic feel
+        const camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 200);
         // Base Position will be used to apply shake offsets
-        const baseCamPos = new THREE.Vector3(0, 1, 12);
+        // Moved back to Z=14 and Up to Y=1.5 to capture full court width
+        const baseCamPos = new THREE.Vector3(0, 1.5, 14);
         camera.position.copy(baseCamPos);
         camera.rotation.order = 'YXZ';
         camera.rotation.x = -15 * Math.PI / 180; 
@@ -518,10 +573,36 @@
             skirt.position.y = 0.35;
             group.add(skirt);
             
+            // Trail Line (for Motion Blur effect)
+            // We use a Line loop that we'll update every frame
+            const trailPoints = [];
+            for(let i=0; i<5; i++) trailPoints.push(new THREE.Vector3(0,0,0));
+            const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPoints);
+            const trailMat = new THREE.LineBasicMaterial({ color: CONFIG.colors.trail, transparent: true, opacity: 0.5 });
+            const trail = new THREE.Line(trailGeo, trailMat);
+            scene.add(trail); // Add separately so it doesn't rotate with shuttle
+            trail.visible = false;
+
+            // Shadow (Drop Shadow on Floor)
+            const shadowGeo = new THREE.CircleGeometry(0.8, 16);
+            const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.6 });
+            const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+            shadow.rotation.x = -Math.PI / 2;
+            shadow.position.y = -4.95; // Just above floor
+            scene.add(shadow);
+            shadow.visible = false;
+            
             // Rotate so cork faces forward/motion usually
             group.rotation.x = -Math.PI / 2;
             
-            group.userData = { velocity: new THREE.Vector3(), rotSpeed: 0, returning: false };
+            group.userData = { 
+                velocity: new THREE.Vector3(), 
+                rotSpeed: 0, 
+                returning: false,
+                trail: trail,
+                shadow: shadow,
+                history: [] 
+            };
             return group;
         }, 30);
 
@@ -554,21 +635,63 @@
 
         // --- GAME FUNCTIONS ---
 
+        function runCountdown(callback) {
+            state.isInCountdown = true;
+            const el = document.getElementById('countdown');
+            let count = 3;
+            el.innerText = count;
+            el.style.opacity = 1;
+            el.style.transform = 'translate(-50%, -50%) scale(1)';
+
+            const interval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    el.innerText = count;
+                    // Reset animation
+                    el.style.animation = 'none';
+                    el.offsetHeight; /* trigger reflow */
+                    el.style.animation = null; 
+                } else {
+                    clearInterval(interval);
+                    el.innerText = "SMASH!";
+                    setTimeout(() => {
+                        el.style.opacity = 0;
+                        state.isInCountdown = false;
+                        callback();
+                    }, 600);
+                }
+            }, 800);
+        }
+
         function startMatch(ballCount) {
             state.maxBalls = ballCount;
             state.spawnedBalls = 0;
             state.hits = 0;
-            state.isRunning = true;
+            state.isRunning = false;
             state.swinging = false;
             
             document.getElementById('score-val').innerText = '0';
             document.getElementById('max-val').innerText = state.maxBalls;
             document.getElementById('game-over').style.display = 'none';
+            document.getElementById('speed-val').innerText = '0';
             document.body.style.cursor = 'none';
             
+            // Clean up scene objects
             shuttlePool.reset();
+            // Also hide trails and shadows from pool that might be lingering
+            shuttlePool.pool.forEach(s => {
+                if(s.userData.trail) s.userData.trail.visible = false;
+                if(s.userData.shadow) s.userData.shadow.visible = false;
+            });
+
             particlePool.reset();
             AudioSys.init();
+
+            // Run Countdown then start
+            runCountdown(() => {
+                state.isRunning = true;
+                state.lastSpawnTime = clock.getElapsedTime(); // Reset timer so it waits a bit
+            });
         }
 
         function spawnShuttle() {
@@ -588,14 +711,32 @@
             const targetX = playerGroup.position.x + (Math.random() - 0.5) * 10;
             const targetY = -3 + (Math.random() * 2); 
             
-            const speed = CONFIG.baseSpeed + (state.hits * 0.5); 
+            const speed = CONFIG.baseSpeed + (state.hits * 0.8); // Accelerated ramp up 
             const dir = new THREE.Vector3(targetX - x, targetY - y, 5 - (-120)).normalize(); 
             
             s.userData.velocity.copy(dir).multiplyScalar(speed);
             s.userData.rotSpeed = Math.random() * 10;
             s.userData.returning = false;
+            s.userData.history = []; // Reset Trail History
+            
+            // Show Trail & Shadow
+            if(s.userData.trail) s.userData.trail.visible = true;
+            if(s.userData.shadow) s.userData.shadow.visible = true;
             
             s.rotation.set(-Math.PI/2, 0, 0);
+
+            // -- SPEED DISPLAY LOGIC --
+            // Conversion roughly based on game units to meters to KM/H
+            // Scaling factor 2.8 gives realistic smash feeling (200-350km/h)
+            const kmh = Math.round(speed * 2.8);
+            document.getElementById('speed-val').innerText = kmh;
+            
+            // Pop Animation
+            const speedDisplay = document.getElementById('speed-display');
+            speedDisplay.style.transform = 'scale(1.3)';
+            setTimeout(() => {
+                speedDisplay.style.transform = 'scale(1)';
+            }, 100);
         }
 
         function createFeatherExplosion(pos, count = 8) {
@@ -731,6 +872,41 @@
                     const s = shuttlePool.active[i];
                     s.position.addScaledVector(s.userData.velocity, delta);
                     
+                    // UPDATE SHADOW
+                    if(s.userData.shadow) {
+                        s.userData.shadow.position.x = s.position.x;
+                        s.userData.shadow.position.z = s.position.z;
+                        // Scale shadow based on height (smaller when higher)
+                        const h = Math.max(0, s.position.y + 5);
+                        const scale = Math.max(0.2, 1 - (h * 0.05));
+                        s.userData.shadow.scale.setScalar(scale);
+                        
+                        // Hide shadow if behind net or too far
+                        s.userData.shadow.visible = (s.position.z > -40);
+                    }
+
+                    // UPDATE TRAIL
+                    if(s.userData.trail && s.visible) {
+                         const hist = s.userData.history;
+                         hist.unshift(s.position.clone());
+                         if(hist.length > 5) hist.pop();
+                         
+                         const positions = s.userData.trail.geometry.attributes.position.array;
+                         for(let k=0; k<hist.length; k++) {
+                             positions[k*3] = hist[k].x;
+                             positions[k*3+1] = hist[k].y;
+                             positions[k*3+2] = hist[k].z;
+                         }
+                         // Fill rest with last point to prevent trails jumping to 0,0,0
+                         const last = hist[hist.length-1];
+                         for(let k=hist.length; k<5; k++) {
+                              positions[k*3] = last.x;
+                              positions[k*3+1] = last.y;
+                              positions[k*3+2] = last.z;
+                         }
+                         s.userData.trail.geometry.attributes.position.needsUpdate = true;
+                    }
+
                     if (s.userData.velocity.lengthSq() > 0.1) {
                          const target = s.position.clone().add(s.userData.velocity);
                          const m = new THREE.Matrix4();
@@ -775,6 +951,8 @@
                     if (s.userData.returning) {
                          if (s.position.z < -150 || s.position.y > 50 || s.position.y < -10) {
                              shuttlePool.release(s);
+                             if(s.userData.trail) s.userData.trail.visible = false;
+                             if(s.userData.shadow) s.userData.shadow.visible = false;
                          }
                          // Gravity effect
                          const gravity = (s.userData.velocity.z > 0 && s.userData.velocity.z < 10) ? 40 : 20;
@@ -784,6 +962,8 @@
 
                     if (s.position.z > 20) {
                         shuttlePool.release(s);
+                        if(s.userData.trail) s.userData.trail.visible = false;
+                        if(s.userData.shadow) s.userData.shadow.visible = false;
                     }
                 }
 

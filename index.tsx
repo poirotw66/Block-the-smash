@@ -198,16 +198,16 @@ Create a 3D web game "Badminton Defender".
 
 ### Visual & Camera Specs (Crucial)
 *   **Stance**: Defensive Smash Receive.
-*   **Camera Height**: ~1.4m (slightly lower than net top).
-*   **Camera Angle**: 
-    *   **Pitch**: Down approx 15 degrees.
-    *   **Yaw**: Rotated approx 10 degrees (simulating body angle).
-    *   **Visual Check**: The top edge of the net should be visible in the upper-middle of the screen.
+*   **Camera Style**: Panoramic / Full Court View.
+*   **Camera Settings**: 
+    *   **FOV**: Wide (approx 80 degrees) to prevent clipping edges.
+    *   **Position**: Approx Z=14m, Y=1.5m.
+    *   **Angle**: Pitch down 15 deg, Yaw 10 deg.
 *   **Environment**: Dark court, bright net tape.
 
 ### Gameplay
 *   **Core Loop**: Drill Mode (10/25/50 balls).
-*   **Ball Physics**: Smashes come from high up (Z-axis distance) downwards towards the player's waist/knees.
+*   **Ball Physics**: Smashes come from high up (Z-axis distance) downwards towards the player's waist/knees. **SPEED UP**: Increase base speed for faster reaction challenge.
 *   **Action**: Mouse moves racket hand. Click to swing (Wrist snap).
 *   **Racket Details**: The racket head must have VISIBLE strings. Use a generated canvas texture to create a clear grid pattern on the string bed. The string bed should be oval-shaped to fit the frame.
 *   **Hit Logic**: CONTINUOUS COLLISION. 
@@ -220,6 +220,11 @@ Create a 3D web game "Badminton Defender".
 *   **Audio**: Synthesized Web Audio API sound effects (No external assets). Needs: Swing Swoosh, Hit Thwack (High pitch), Block Thud (Low pitch).
 *   **Screen Shake**: Camera should shake briefly on successful active hits.
 *   **Impact**: Light flash on contact.
+*   **UI**: Show Speedometer (KM/H) for incoming smashes.
+*   **Visual Aid (Crucial)**: 
+    *   **Drop Shadows**: Add a shadow on the floor that follows the shuttlecock X/Z to help with depth perception.
+    *   **Trails**: Add a visual trail/line behind the shuttlecock to emphasize speed.
+*   **Start Sequence**: Add a "3, 2, 1, GO" countdown before balls start spawning.
 `;
 
 function App() {
