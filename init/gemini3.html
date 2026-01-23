@@ -219,7 +219,8 @@
 
         // --- GAME CONFIGURATION ---
         const CONFIG = {
-            baseSpeed: 110, // Increased from 90 for faster gameplay
+            baseSpeed: 400, // HYPERSONIC: Increased from 220 to 400
+            dragFactor: 0.008, // Reduced drag to maintain higher velocity
             racketBoundX: 18,
             racketBoundY: 10,
             colors: {
@@ -361,15 +362,14 @@
         scene.background = new THREE.Color(CONFIG.colors.court);
         scene.fog = new THREE.Fog(CONFIG.colors.court, 30, 120);
 
-        // Camera setup for "Defensive Smash Receive" stance - WIDER FOV for Panoramic feel
+        // Camera setup for "Defensive Crouch" stance 
+        // Lower Y (1.0) simulates defensive crouch eye level
         const camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 200);
-        // Base Position will be used to apply shake offsets
-        // Moved back to Z=14 and Up to Y=1.5 to capture full court width
-        const baseCamPos = new THREE.Vector3(0, 1.5, 14);
+        const baseCamPos = new THREE.Vector3(0, 1.0, 14); 
         camera.position.copy(baseCamPos);
         camera.rotation.order = 'YXZ';
-        camera.rotation.x = -15 * Math.PI / 180; 
-        camera.rotation.y = 10 * Math.PI / 180;
+        camera.rotation.x = -10 * Math.PI / 180; // Less pitch down as we are lower
+        camera.rotation.y = 0;
 
         const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -407,7 +407,8 @@
         // --- PLAYER RACKET STRUCTURE ---
         // 1. PlayerGroup (The Hand/Grip Position)
         const playerGroup = new THREE.Group();
-        playerGroup.position.set(2, -2, 4); 
+        // Lower default position to match lower camera/crouch
+        playerGroup.position.set(2, -2.5, 4); 
         scene.add(playerGroup);
 
         // 2. WristPivot (Rotates for swings)
@@ -702,19 +703,30 @@
 
             state.spawnedBalls++;
 
-            // Spawn High (Smash origin)
-            const x = (Math.random() - 0.5) * 40; 
-            const y = 12 + Math.random() * 5; 
-            s.position.set(x, y, -120);
+            // REALISTIC SMASH SPAWN
+            // Origin: Back court (Z < -60), High (Y > 15)
+            // Target: Player Body/Side (Z=5, Y=-1 to -3)
             
-            // Aim at defensive area (Waist/Knee level)
-            const targetX = playerGroup.position.x + (Math.random() - 0.5) * 10;
-            const targetY = -3 + (Math.random() * 2); 
+            const originZ = -90 - (Math.random() * 30); // Deep back court
+            const originY = 18 + (Math.random() * 6); // High jump smash height
+            const originX = (Math.random() - 0.5) * 40; // Anywhere on back line
             
-            const speed = CONFIG.baseSpeed + (state.hits * 0.8); // Accelerated ramp up 
-            const dir = new THREE.Vector3(targetX - x, targetY - y, 5 - (-120)).normalize(); 
+            s.position.set(originX, originY, originZ);
             
-            s.userData.velocity.copy(dir).multiplyScalar(speed);
+            // Target Logic: Aim for player body or just wide
+            // Player is roughly at X=4 or X=-4, Y=-2.5
+            const playerX = (state.handedness === 'right') ? 4 : -4;
+            // Add some variance (target hunting)
+            const targetX = playerX + (Math.random() - 0.5) * 12; // Radius around player
+            const targetY = -2.5 + (Math.random() * 2); // Knee/Waist height
+            const targetZ = 5; // Behind racket hit plane
+
+            const dir = new THREE.Vector3(targetX - originX, targetY - originY, targetZ - originZ).normalize(); 
+            
+            // High initial speed
+            const initialSpeed = CONFIG.baseSpeed + (state.hits * 1.5); 
+            
+            s.userData.velocity.copy(dir).multiplyScalar(initialSpeed);
             s.userData.rotSpeed = Math.random() * 10;
             s.userData.returning = false;
             s.userData.history = []; // Reset Trail History
@@ -726,9 +738,8 @@
             s.rotation.set(-Math.PI/2, 0, 0);
 
             // -- SPEED DISPLAY LOGIC --
-            // Conversion roughly based on game units to meters to KM/H
-            // Scaling factor 2.8 gives realistic smash feeling (200-350km/h)
-            const kmh = Math.round(speed * 2.8);
+            // Show smash top speed (approx 300-400kmh range based on scalar)
+            const kmh = Math.round(initialSpeed * 1.5); // Adjusted visual multiplier
             document.getElementById('speed-val').innerText = kmh;
             
             // Pop Animation
@@ -857,7 +868,7 @@
                 }
 
                 // Spawn Shuttles
-                const spawnDelay = Math.max(0.4, 0.8 - (state.hits * 0.01)); 
+                const spawnDelay = Math.max(0.4, 0.9 - (state.hits * 0.02)); // FASTER SPAWN: Adjusted spawn rate for higher intensity
                 if (now - state.lastSpawnTime > spawnDelay) {
                     spawnShuttle();
                     state.lastSpawnTime = now;
@@ -866,10 +877,23 @@
                 // Update Shuttles & Collisions
                 const sweetSpot = new THREE.Vector3();
                 strings.getWorldPosition(sweetSpot);
-                const hitRadius = 3.0; 
+                const hitRadius = 4.0; // WIDER HITBOX: Increased from 3.5 to 4.0 to compensate for high speed
 
                 for (let i = shuttlePool.active.length - 1; i >= 0; i--) {
                     const s = shuttlePool.active[i];
+                    
+                    // --- PHYSICS: DRAG SIMULATION ---
+                    if (!s.userData.returning) {
+                        const speed = s.userData.velocity.length();
+                        // Drag equation: Fd = -c * v^2. 
+                        // Simplified: speed -= speed * speed * factor * delta
+                        if (speed > 0) {
+                            const drag = CONFIG.dragFactor * speed * speed * delta;
+                            const newSpeed = Math.max(0, speed - drag);
+                            s.userData.velocity.multiplyScalar(newSpeed / speed);
+                        }
+                    }
+                    
                     s.position.addScaledVector(s.userData.velocity, delta);
                     
                     // UPDATE SHADOW
@@ -923,7 +947,7 @@
                               if (state.swinging) {
                                    // ACTIVE SMASH RETURN
                                    createFeatherExplosion(s.position, 12);
-                                   s.userData.velocity.z = -Math.abs(s.userData.velocity.z) * 1.0 - 15; // Fast
+                                   s.userData.velocity.z = -Math.abs(s.userData.velocity.z) * 1.0 - 15; // Fast return
                                    s.userData.velocity.y = Math.abs(s.userData.velocity.y) + 12; // High arc
                                    s.userData.velocity.x += (Math.random() - 0.5) * 10;
                                    

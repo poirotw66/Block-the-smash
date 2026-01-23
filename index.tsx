@@ -196,18 +196,21 @@ const styles = {
 const BASE_PROMPT = `
 Create a 3D web game "Badminton Defender".
 
-### Visual & Camera Specs (Crucial)
-*   **Stance**: Defensive Smash Receive.
-*   **Camera Style**: Panoramic / Full Court View.
+### Visual & Camera Specs (Crucial for Realism)
+*   **Stance**: Crouch Defensive Stance.
+*   **Camera Style**: Panoramic / Full Court View, but LOWERED.
 *   **Camera Settings**: 
-    *   **FOV**: Wide (approx 80 degrees) to prevent clipping edges.
-    *   **Position**: Approx Z=14m, Y=1.5m.
-    *   **Angle**: Pitch down 15 deg, Yaw 10 deg.
+    *   **FOV**: Wide (approx 80 degrees).
+    *   **Position**: Approx Z=14m, Y=1.0m (Lowered to simulate crouching player eye-level).
+    *   **Angle**: Pitch down 10 deg.
 *   **Environment**: Dark court, bright net tape.
 
-### Gameplay
+### Gameplay & Physics (HYPER REALISM)
 *   **Core Loop**: Drill Mode (10/25/50 balls).
-*   **Ball Physics**: Smashes come from high up (Z-axis distance) downwards towards the player's waist/knees. **SPEED UP**: Increase base speed for faster reaction challenge.
+*   **Ball Physics (Aerodynamics)**: 
+    *   **Drag/Air Resistance**: CRITICAL. The shuttle must start with EXTREME speed (400km/h Smash) but decelerate due to air resistance. 
+    *   **Speed**: The flight time should be extremely short (< 0.4s) to simulate human reaction limits.
+    *   **Trajectory**: Flatter and steeper. Origin point should be realistic jump-smash height relative to a deep backcourt position.
 *   **Action**: Mouse moves racket hand. Click to swing (Wrist snap).
 *   **Racket Details**: The racket head must have VISIBLE strings. Use a generated canvas texture to create a clear grid pattern on the string bed. The string bed should be oval-shaped to fit the frame.
 *   **Hit Logic**: CONTINUOUS COLLISION. 
@@ -217,7 +220,7 @@ Create a 3D web game "Badminton Defender".
 *   **Default**: Right Handed.
 
 ### Juice & Feedback (New)
-*   **Audio**: Synthesized Web Audio API sound effects (No external assets). Needs: Swing Swoosh, Hit Thwack (High pitch), Block Thud (Low pitch).
+*   **Audio**: Synthesized Web Audio API sound effects.
 *   **Screen Shake**: Camera should shake briefly on successful active hits.
 *   **Impact**: Light flash on contact.
 *   **UI**: Show Speedometer (KM/H) for incoming smashes.
